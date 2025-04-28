@@ -2,36 +2,38 @@ import torch
 import torch.nn as nn
 
 from torch.nn import functional as F
+
 torch.manual_seed(1337)
 
-####
-# batch_size = 32
-# block_size = 8
-# max_iters = 5000
-# eval_interval = 500
-# learning_rate = 1e-2
-# device = 'cuda' if torch.cuda.is_available() else 'cpu'
-# eval_iters = 200
-# n_embd = 32
-# n_head = 4
-# n_layer = 3
-# dropout = 0.2
+# This code base is mostly a working copy from Andrej Karpathy's makemore series.
+SMALL = True
 
-# ####
-batch_size = 64
-block_size = 256
-max_iters = 5000
-eval_interval = 500
-learning_rate = 3e-4
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-eval_iters = 200
-n_embd = 384
-n_head = 6
-n_layer = 6
-dropout = 0.2
+if SMALL:
+    batch_size = 32
+    block_size = 8
+    max_iters = 5000
+    eval_interval = 500
+    learning_rate = 1e-2
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    eval_iters = 200
+    n_embd = 32
+    n_head = 4
+    n_layer = 3
+    dropout = 0.2
+else:
+    batch_size = 64
+    block_size = 256
+    max_iters = 5000
+    eval_interval = 500
+    learning_rate = 3e-4
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    eval_iters = 200
+    n_embd = 384
+    n_head = 6
+    n_layer = 6
+    dropout = 0.2
 
 print(f"device : {device}")
-###
 
 with open('input.txt','r') as f:
     text = f.read()
@@ -51,7 +53,6 @@ n = int(0.9*len(data))
 train_data = data[:n]
 val_data = data[n:]
 
-
 def get_batch(split):
     """
     Get a batch of data given a split
@@ -61,10 +62,11 @@ def get_batch(split):
         y offset by 1 from x, targets of x
 
     Args:
-        split (_type_): _description_
-
+        split (str): the batch to use
     Returns:
-        _type_: _description_
+        Tuple:
+            x : x data
+            y : y data
      """
      
     data = train_data if split == 'train' else val_data
@@ -108,20 +110,23 @@ class Block(nn.Module):
         self.ln2 = nn.LayerNorm(n_embd)
         
     def forward(self, x):
-        x = x + self.sa(self.ln1(x)) # pre sa / ffwd layer normalization. the ln layers are normalizing each token of data to have zero mean and unit variance (across the 32 dimensions that represent it)
+        # pre sa / ffwd layer normalization.
+        # the ln layers are normalizing each token of data to have zero mean and unit variance
+        # (across the 32 dimensions that represent it)
+        x = x + self.sa(self.ln1(x))
         x = x + self.ffwd(self.ln1(x))
         
         return x
 
 
 class Head(nn.Module):
-    # decoder block. due to lower triangular masking
-    # encoder block : allow all nodes to talk to each other
-    # cross attention : when the queries are produced from self, but keys and values come from another source
-    # sqrt(head size = q), important due to weight matrix variance. if variance too high, softmax becomes sharp focusing on specific one hot values.
+    # decoder block. uses lower triangular masking
+    # distinguish vs. encoder block : allow all nodes to talk to each other
+    # cross attention : keys and values come from another encoder block allows for cross context learning
+    #   (e.g. machine translation)
+    # sqrt(head size = q), important due to weight matrix variance.
+    #   if variance too high, softmax becomes sharp focusing on specific one hot values.
     #    sqrt allows to control the variance
-
-    # v2 with attention - 1 head
 
     def __init__(self, head_size):
         super().__init__()
@@ -135,26 +140,34 @@ class Head(nn.Module):
         self.dropout = nn.Dropout(dropout)
         
     def forward(self, x):
+        """
+        Forward pass through the network for the head.
+
+        Args:
+            x: the tokenized and embedded characters
+
+        Returns:
+            x : x after a forward pass through the head
+
+        """
         B,T,C = x.shape
 
         k = self.key(x) # (B, T, C)
         q = self.query(x) # (B, T, C)
 
         wei = q @ k.transpose(-2, -1) * C **-0.5 # (B, T, C) x (B, C, T) -> (B, T, T)
-        
-        wei = wei.masked_fill(self.tril[:T, :T]==0, float('-inf'))
-        
+        wei = wei.masked_fill(self.tril[:T, :T]==0, float('-inf')) # this masks the upper part
         wei = F.softmax(wei, dim=-1) # B,T,T
-        
         wei = self.dropout(wei)
-
         v = self.value(x) # (B,T,C)
-
         out = wei @ v # (B,T,T) @ (B,T,C) -> (B,T,C) v is a collapsed representation of x, with learned weights.
 
         return out
 
 class MultiHeadAttention(nn.Module):
+    """
+    Multi head attention block using multiple heads of given head size
+    """
     
     def __init__(self, num_heads : int, head_size : int):
         super().__init__()
@@ -184,7 +197,11 @@ class BigramLanguageModel(nn.Module):
         
         self.lm_head = nn.Linear(n_embd, vocab_size)
     
-    def forward(self, idx, targets=None):
+    def forward(
+            self,
+            idx,
+            targets=None):
+
         B, T = idx.shape
         
         tok_emb = self.token_embedding_table(idx) # B,T,C
@@ -236,7 +253,6 @@ def train():
 
     optimizer = torch.optim.AdamW(m.parameters(), lr=learning_rate)
 
-
     @torch.no_grad()
     def estimate_loss():
         out = {}
@@ -271,7 +287,6 @@ def train():
         
     idx = torch.zeros((1,1), dtype=torch.long, device=device)
     print(decode(m.generate(idx, max_new_tokens=300)[0].tolist()))
-
 
     torch.save(m.state_dict(), 'model.pt')
 
